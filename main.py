@@ -312,6 +312,10 @@ def get_sender_name(message):
 # EXTRACTION DES DONNÉES D'UN MAIL
 # ============================================================
 def parse_email_body(body_text):
+    """
+    Parse le corps d'un email avec parsing en cascade.
+    Retourne None si aucun email n'est trouvé (champ obligatoire).
+    """
     result = {
         "genre": "",
         "nom": "",
@@ -323,43 +327,65 @@ def parse_email_body(body_text):
     # Nettoyage du texte
     body_text = body_text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
-    # Pattern principal :
-    # {Genre} {Nom} {Prénom} vient de vous suggérer ceci à {Lieu}:
-    # {Commentaire}
-    # Pour répondre: {Email}
-    
-    # Pattern flexible pour capturer genre, nom, prénom
-    pattern = r"^(Monsieur|Madame|Herr|Frau|Signor|Signora|Mx)\s+(\S+)\s+(.+?)\s+vient de vous sugg[ée]rer ceci [àa]\s*.+?:"
-    match = re.match(pattern, body_text, re.IGNORECASE | re.DOTALL)
+    # ÉTAPE 1: Extraire l'email (OBLIGATOIRE)
+    email_pattern = r"Pour r[ée]pondre:\s*(\S+@\S+)"
+    email_match = re.search(email_pattern, body_text, re.IGNORECASE)
+
+    if not email_match:
+        # Pas d'email = entrée invalide
+        return None
+
+    result["email"] = email_match.group(1).strip()
+
+    # Texte avant "Pour répondre" (contient intro + commentaire)
+    text_before_email = body_text[:email_match.start()].strip()
+
+    # ÉTAPE 2: Parsing en cascade (du plus complet au plus simple)
+
+    # Pattern 1: Format complet - Genre Nom Prénom
+    pattern1 = r"^(Monsieur|Madame|Herr|Frau|Signor|Signora|Mx)\s+(\S+)\s+(.+?)\s+vient de vous sugg[ée]rer ceci [àa]\s*.+?:\s*"
+    match = re.match(pattern1, text_before_email, re.IGNORECASE | re.DOTALL)
 
     if match:
         genre_raw = match.group(1).strip().lower()
         result["genre"] = GENDER_MAP.get(genre_raw, "Autre")
         result["nom"] = match.group(2).strip()
         result["prenom"] = match.group(3).strip()
+        result["commentaire"] = text_before_email[match.end():].strip()
+        return result
 
-        # Extraire le reste après le match
-        reste = body_text[match.end():].strip()
+    # Pattern 2: Genre Nom (sans prénom)
+    pattern2 = r"^(Monsieur|Madame|Herr|Frau|Signor|Signora|Mx)\s+(\S+)\s+vient de vous sugg[ée]rer ceci [àa]\s*.+?:\s*"
+    match = re.match(pattern2, text_before_email, re.IGNORECASE | re.DOTALL)
 
-        # Chercher "Pour répondre:" ou "Pour r\u00e9pondre:" pour séparer commentaire et email
-        email_pattern = r"Pour r[ée]pondre:\s*(\S+@\S+)"
-        email_match = re.search(email_pattern, reste, re.IGNORECASE)
+    if match:
+        genre_raw = match.group(1).strip().lower()
+        result["genre"] = GENDER_MAP.get(genre_raw, "Autre")
+        result["nom"] = match.group(2).strip()
+        result["commentaire"] = text_before_email[match.end():].strip()
+        return result
 
-        if email_match:
-            result["commentaire"] = reste[:email_match.start()].strip()
-            result["email"] = email_match.group(1).strip()
-        else:
-            result["commentaire"] = reste.strip()
-    else:
-        # Tentative de parsing plus souple
-        # Chercher au moins l'email
-        email_pattern = r"Pour r[ée]pondre:\s*(\S+@\S+)"
-        email_match = re.search(email_pattern, body_text, re.IGNORECASE)
-        if email_match:
-            result["email"] = email_match.group(1).strip()
+    # Pattern 3: Nom Prénom (sans genre)
+    pattern3 = r"^(\S+)\s+(.+?)\s+vient de vous sugg[ée]rer ceci [àa]\s*.+?:\s*"
+    match = re.match(pattern3, text_before_email, re.IGNORECASE | re.DOTALL)
 
-        result["commentaire"] = f"[FORMAT NON RECONNU] {body_text[:500]}"
+    if match:
+        result["nom"] = match.group(1).strip()
+        result["prenom"] = match.group(2).strip()
+        result["commentaire"] = text_before_email[match.end():].strip()
+        return result
 
+    # Pattern 4: Juste Nom (minimal)
+    pattern4 = r"^(\S+)\s+vient de vous sugg[ée]rer ceci [àa]\s*.+?:\s*"
+    match = re.match(pattern4, text_before_email, re.IGNORECASE | re.DOTALL)
+
+    if match:
+        result["nom"] = match.group(1).strip()
+        result["commentaire"] = text_before_email[match.end():].strip()
+        return result
+
+    # Aucun pattern reconnu, mais on a l'email → garder avec marqueur
+    result["commentaire"] = f"[FORMAT NON RECONNU] {text_before_email[:500]}"
     return result
 
 
@@ -514,6 +540,11 @@ def main():
 
             # Marquer comme traité dans tous les cas
             processed_ids.add(msg_info["id"])
+
+            # Si pas d'email trouvé (champ obligatoire), ignorer
+            if parsed is None:
+                filtered_count += 1
+                continue
 
             # Filtrer les emails invalides
             if not is_valid_email(parsed["email"]):
