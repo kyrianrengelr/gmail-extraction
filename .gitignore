@@ -1,0 +1,28 @@
+# Credentials - NE JAMAIS COMMIT
+credentials.json
+token.json
+
+# State file
+last_processed.json
+
+# Virtual environment
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Google Apps Script (pas besoin)
+Code.gs
