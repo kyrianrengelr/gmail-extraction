@@ -137,8 +137,8 @@ def is_valid_name(nom, prenom):
     return True
 
 
-# Mots-clés suspects dans les commentaires
-COMMENT_SPAM_KEYWORDS = {"test", "essai", "blabla", "asdf", "qwerty"}
+# Commentaires exactement égaux à ces valeurs = invalides
+COMMENT_SPAM_EXACT = {"test", "essai", "blabla", "asdf", "qwerty", "ok", "oui", "non"}
 
 
 def is_valid_comment(commentaire):
@@ -148,13 +148,8 @@ def is_valid_comment(commentaire):
 
     commentaire_lower = commentaire.lower().strip()
 
-    # 1. Commentaire qui contient "test" ou autres mots suspects
-    for keyword in COMMENT_SPAM_KEYWORDS:
-        if keyword in commentaire_lower:
-            return False
-
-    # 2. Commentaire trop court (moins de 3 caractères)
-    if len(commentaire_lower) < 3:
+    # Rejeter uniquement si le commentaire est EXACTEMENT un mot spam
+    if commentaire_lower in COMMENT_SPAM_EXACT:
         return False
 
     return True
