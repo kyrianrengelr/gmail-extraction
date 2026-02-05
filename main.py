@@ -102,6 +102,64 @@ def is_valid_email(email):
     return True
 
 
+# Noms suspects à filtrer
+SUSPICIOUS_NAMES = {
+    "test", "blabla", "bla", "toto", "tata", "titi", "tutu",
+    "azerty", "qwerty", "asdf", "xxx", "zzz", "aaa", "bbb",
+    "fake", "spam", "null", "none", "na", "n/a", "inconnu",
+    "anonymous", "anonyme", "client", "user", "utilisateur",
+}
+
+
+def is_valid_name(nom, prenom):
+    """Vérifie si le nom/prénom est valide."""
+    nom = (nom or "").lower().strip()
+    prenom = (prenom or "").lower().strip()
+
+    # 1. Nom ou prénom trop court (1 caractère)
+    if len(nom) <= 1 or len(prenom) <= 1:
+        return False
+
+    # 2. Noms suspects
+    if nom in SUSPICIOUS_NAMES or prenom in SUSPICIOUS_NAMES:
+        return False
+
+    # 3. Que des chiffres
+    if nom.isdigit() or prenom.isdigit():
+        return False
+
+    # 4. Répétition excessive (ex: aaaa, bbbb)
+    if len(set(nom)) <= 1 and len(nom) > 1:
+        return False
+    if len(set(prenom)) <= 1 and len(prenom) > 1:
+        return False
+
+    return True
+
+
+# Mots-clés suspects dans les commentaires
+COMMENT_SPAM_KEYWORDS = {"test", "essai", "blabla", "asdf", "qwerty"}
+
+
+def is_valid_comment(commentaire):
+    """Vérifie si le commentaire est valide."""
+    if not commentaire:
+        return True  # Commentaire vide accepté
+
+    commentaire_lower = commentaire.lower().strip()
+
+    # 1. Commentaire qui contient "test" ou autres mots suspects
+    for keyword in COMMENT_SPAM_KEYWORDS:
+        if keyword in commentaire_lower:
+            return False
+
+    # 2. Commentaire trop court (moins de 3 caractères)
+    if len(commentaire_lower) < 3:
+        return False
+
+    return True
+
+
 # ============================================================
 # AUTHENTIFICATION
 # ============================================================
@@ -423,6 +481,7 @@ def main():
     rows_to_add = []
     errors = []
     filtered_count = 0
+    seen_emails = set()  # Pour dédoublonnage
 
     for i, msg_info in enumerate(new_messages):
         try:
@@ -442,6 +501,23 @@ def main():
 
             # Filtrer les emails invalides
             if not is_valid_email(parsed["email"]):
+                filtered_count += 1
+                continue
+
+            # Dédoublonnage par email
+            email_lower = parsed["email"].lower().strip()
+            if email_lower in seen_emails:
+                filtered_count += 1
+                continue
+            seen_emails.add(email_lower)
+
+            # Filtrer les noms suspects
+            if not is_valid_name(parsed["nom"], parsed["prenom"]):
+                filtered_count += 1
+                continue
+
+            # Filtrer les commentaires suspects
+            if not is_valid_comment(parsed["commentaire"]):
                 filtered_count += 1
                 continue
 
