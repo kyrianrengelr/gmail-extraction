@@ -37,6 +37,70 @@ GENDER_MAP = {
     "mx": "Autre",
 }
 
+# ============================================================
+# FILTRAGE DES EMAILS INVALIDES
+# ============================================================
+# Emails à exclure (blacklist)
+EMAIL_BLACKLIST = {
+    "kyrian.engel@gmail.com",
+    "kyrianr.engelr@gmail.com",
+    "kyrian.kyrian.engel@gmail.com",
+}
+
+# Mots-clés suspects dans la partie locale de l'email
+SPAM_KEYWORDS = {
+    "test", "fake", "spam", "caca", "popo", "pipi", "prout",
+    "asdf", "qwerty", "azerty", "aaa", "xxx", "zzz",
+    "noreply", "no-reply", "donotreply",
+}
+
+# Domaines jetables connus
+DISPOSABLE_DOMAINS = {
+    "yopmail.com", "tempmail.com", "guerrillamail.com", "mailinator.com",
+    "10minutemail.com", "throwaway.email", "fakeinbox.com", "trashmail.com",
+    "temp-mail.org", "getnada.com", "maildrop.cc",
+}
+
+
+def is_valid_email(email):
+    """Vérifie si un email est valide (filtrage modéré)."""
+    if not email:
+        return False
+
+    email = email.lower().strip()
+
+    # 1. Blacklist explicite
+    if email in EMAIL_BLACKLIST:
+        return False
+
+    # 2. Format basique
+    if "@" not in email or "." not in email:
+        return False
+
+    local_part, domain = email.rsplit("@", 1)
+
+    # 3. Partie locale trop courte (moins de 3 caractères)
+    if len(local_part) < 3:
+        return False
+
+    # 4. Domaines jetables
+    if domain in DISPOSABLE_DOMAINS:
+        return False
+
+    # 5. Mots-clés spam (correspondance exacte de la partie locale)
+    if local_part in SPAM_KEYWORDS:
+        return False
+
+    # 6. Que des chiffres dans la partie locale
+    if local_part.isdigit():
+        return False
+
+    # 7. Répétition excessive (ex: aaaa, 1111)
+    if len(set(local_part)) <= 2 and len(local_part) > 3:
+        return False
+
+    return True
+
 
 # ============================================================
 # AUTHENTIFICATION
@@ -358,6 +422,7 @@ def main():
     # Traiter chaque nouveau mail
     rows_to_add = []
     errors = []
+    filtered_count = 0
 
     for i, msg_info in enumerate(new_messages):
         try:
@@ -371,6 +436,14 @@ def main():
             nom_commerce = get_sender_name(msg)
             body = get_email_body(msg)
             parsed = parse_email_body(body)
+
+            # Marquer comme traité dans tous les cas
+            processed_ids.add(msg_info["id"])
+
+            # Filtrer les emails invalides
+            if not is_valid_email(parsed["email"]):
+                filtered_count += 1
+                continue
 
             # Colonnes : Nom commerce | Catégorie | Genre | Nom | Prénom | Nom complet | Email | Statut Email | Note | Commentaire
             row = [
@@ -386,7 +459,6 @@ def main():
                 parsed["commentaire"],  # Commentaire
             ]
             rows_to_add.append(row)
-            processed_ids.add(msg_info["id"])
 
             if (i + 1) % 50 == 0:
                 print(f"   ⏳ {i + 1}/{len(new_messages)} mails traités...")
@@ -396,7 +468,7 @@ def main():
             print(f"   ❌ {error_msg}")
             errors.append(error_msg)
 
-    print(f"\n✅ Extraction terminée : {len(rows_to_add)} mails extraits, {len(errors)} erreurs")
+    print(f"\n✅ Extraction terminée : {len(rows_to_add)} mails extraits, {filtered_count} filtrés, {len(errors)} erreurs")
 
     # Écrire dans Google Sheets
     if rows_to_add:
