@@ -276,6 +276,22 @@ def save_state(state, sheets_service=None):
             print(f"   ⚠️ Erreur sauvegarde état: {e}")
 
 
+def load_existing_emails(sheets_service):
+    """Charge les emails déjà présents dans le Sheet pour éviter les doublons."""
+    try:
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{SHEET_NAME}!G:G",  # Colonne G = Email
+        ).execute()
+        values = result.get("values", [])
+        # Ignorer l'en-tête (première ligne) et normaliser
+        emails = {row[0].lower().strip() for row in values[1:] if row and row[0]}
+        return emails
+    except Exception as e:
+        print(f"   ⚠️ Impossible de charger les emails existants: {e}")
+        return set()
+
+
 # ============================================================
 # EXTRACTION DU NOM DE COMMERCE (depuis le header From)
 # ============================================================
@@ -472,11 +488,16 @@ def main():
         print("✅ Aucun nouveau mail. Fin.")
         return
 
+    # Charger les emails déjà dans le Sheet pour dédoublonnage complet
+    print("📋 Chargement des emails existants pour dédoublonnage...")
+    existing_emails = load_existing_emails(sheets_service)
+    print(f"   → {len(existing_emails)} emails déjà dans le Sheet")
+
     # Traiter chaque nouveau mail
     rows_to_add = []
     errors = []
     filtered_count = 0
-    seen_emails = set()  # Pour dédoublonnage
+    seen_emails = set(existing_emails)  # Inclure les emails existants
 
     for i, msg_info in enumerate(new_messages):
         try:
