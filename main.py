@@ -318,7 +318,7 @@ def load_existing_emails(sheets_service):
         result = api_call_with_retry(
             sheets_service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{SHEET_NAME}!G:G",  # Colonne G = Email
+                range=f"{SHEET_NAME}!H:H",  # Colonne H = Email (A=ID)
             ).execute
         )
         values = result.get("values", [])
@@ -640,19 +640,20 @@ def main():
                 stats["invalid_comment"] += 1
                 continue
 
-            # Colonnes : Nom commerce | Catégorie | Genre | Nom | Prénom | Nom complet | Email | Statut Email | Note | Date | Commentaire
+            # Colonnes : ID | Nom commerce | Catégorie | Genre | Nom | Prénom | Nom complet | Email | Statut Email | Note | Date | Commentaire
+            # Note: ID (colonne A) est généré automatiquement par =ROW(), on écrit à partir de B
             row = [
-                nom_commerce,           # A: Nom commerce
-                DEFAULT_CATEGORY,       # B: Catégorie
-                parsed["genre"],        # C: Genre
-                parsed["nom"],          # D: Nom
-                parsed["prenom"],       # E: Prénom
-                "",                     # F: Nom complet (vide)
-                parsed["email"],        # G: Email
-                "Pending",              # H: Statut Email
-                1,                      # I: Note
-                date_reception,         # J: Date de réception
-                parsed["commentaire"],  # K: Commentaire
+                nom_commerce,           # B: Nom commerce
+                DEFAULT_CATEGORY,       # C: Catégorie
+                parsed["genre"],        # D: Genre
+                parsed["nom"],          # E: Nom
+                parsed["prenom"],       # F: Prénom
+                "",                     # G: Nom complet (vide)
+                parsed["email"],        # H: Email
+                "Pending",              # I: Statut Email
+                1,                      # J: Note
+                date_reception,         # K: Date de réception
+                parsed["commentaire"],  # L: Commentaire
             ]
             rows_to_add.append(row)
 
@@ -674,11 +675,11 @@ def main():
     if rows_to_add:
         print("\n📤 Écriture dans Google Sheets...")
 
-        # Trouver la prochaine ligne vide
+        # Trouver la prochaine ligne vide (on regarde la colonne B car A contient l'ID)
         result = api_call_with_retry(
             sheets_service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{SHEET_NAME}!A:A",
+                range=f"{SHEET_NAME}!B:B",
             ).execute
         )
         existing_rows = len(result.get("values", []))
@@ -696,12 +697,23 @@ def main():
             api_call_with_retry(
                 sheets_service.spreadsheets().values().update(
                     spreadsheetId=SPREADSHEET_ID,
-                    range=f"{SHEET_NAME}!A{next_row + start}",
+                    range=f"{SHEET_NAME}!B{next_row + start}",  # Commence à B (A = ID auto)
                     valueInputOption="RAW",
                     body=body,
                 ).execute
             )
             print(f"   → Lot {start + 1} à {start + len(batch)} écrit")
+
+        # Ajouter la formule =ROW() pour les IDs des nouvelles lignes
+        id_formulas = [["=ROW()"] for _ in range(len(rows_to_add))]
+        api_call_with_retry(
+            sheets_service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{SHEET_NAME}!A{next_row}:A{next_row + len(rows_to_add) - 1}",
+                valueInputOption="USER_ENTERED",
+                body={"values": id_formulas},
+            ).execute
+        )
 
         print(f"   ✅ {len(rows_to_add)} lignes ajoutées")
 
