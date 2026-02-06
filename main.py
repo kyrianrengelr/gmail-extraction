@@ -308,6 +308,23 @@ def get_sender_name(message):
     return ""
 
 
+def get_email_date(message):
+    """Extrait la date de réception de l'email et la formate en DD/MM/YYYY."""
+    headers = message.get("payload", {}).get("headers", [])
+    for header in headers:
+        if header["name"].lower() == "date":
+            date_str = header["value"]
+            # Format typique: "Thu, 6 Feb 2025 10:30:00 +0100"
+            try:
+                from email.utils import parsedate_to_datetime
+                dt = parsedate_to_datetime(date_str)
+                return dt.strftime("%d/%m/%Y")
+            except Exception:
+                # Fallback: retourner la date brute tronquée
+                return date_str[:16] if date_str else ""
+    return ""
+
+
 # ============================================================
 # EXTRACTION DES DONNÉES D'UN MAIL
 # ============================================================
@@ -522,8 +539,16 @@ def main():
     # Traiter chaque nouveau mail
     rows_to_add = []
     errors = []
-    filtered_count = 0
     seen_emails = set(existing_emails)  # Inclure les emails existants
+
+    # Statistiques détaillées de filtrage
+    stats = {
+        "no_email": 0,        # Pas d'email trouvé
+        "invalid_email": 0,   # Email invalide (blacklist, spam, etc.)
+        "duplicate": 0,       # Doublon
+        "invalid_name": 0,    # Nom suspect
+        "invalid_comment": 0, # Commentaire suspect
+    }
 
     for i, msg_info in enumerate(new_messages):
         try:
@@ -535,6 +560,7 @@ def main():
 
             # Extraire les données
             nom_commerce = get_sender_name(msg)
+            date_reception = get_email_date(msg)
             body = get_email_body(msg)
             parsed = parse_email_body(body)
 
@@ -543,32 +569,32 @@ def main():
 
             # Si pas d'email trouvé (champ obligatoire), ignorer
             if parsed is None:
-                filtered_count += 1
+                stats["no_email"] += 1
                 continue
 
             # Filtrer les emails invalides
             if not is_valid_email(parsed["email"]):
-                filtered_count += 1
+                stats["invalid_email"] += 1
                 continue
 
             # Dédoublonnage par email
             email_lower = parsed["email"].lower().strip()
             if email_lower in seen_emails:
-                filtered_count += 1
+                stats["duplicate"] += 1
                 continue
             seen_emails.add(email_lower)
 
             # Filtrer les noms suspects
             if not is_valid_name(parsed["nom"], parsed["prenom"]):
-                filtered_count += 1
+                stats["invalid_name"] += 1
                 continue
 
             # Filtrer les commentaires suspects
             if not is_valid_comment(parsed["commentaire"]):
-                filtered_count += 1
+                stats["invalid_comment"] += 1
                 continue
 
-            # Colonnes : Nom commerce | Catégorie | Genre | Nom | Prénom | Nom complet | Email | Statut Email | Note | Commentaire
+            # Colonnes : Nom commerce | Catégorie | Genre | Nom | Prénom | Nom complet | Email | Statut Email | Note | Commentaire | Date
             row = [
                 nom_commerce,           # Nom commerce
                 "Fast-food",            # Catégorie
@@ -580,6 +606,7 @@ def main():
                 "Pending",              # Statut Email
                 1,                      # Note
                 parsed["commentaire"],  # Commentaire
+                date_reception,         # Date de réception
             ]
             rows_to_add.append(row)
 
@@ -591,7 +618,11 @@ def main():
             print(f"   ❌ {error_msg}")
             errors.append(error_msg)
 
-    print(f"\n✅ Extraction terminée : {len(rows_to_add)} mails extraits, {filtered_count} filtrés, {len(errors)} erreurs")
+    total_filtered = sum(stats.values())
+    print(f"\n✅ Extraction terminée : {len(rows_to_add)} mails extraits, {total_filtered} filtrés, {len(errors)} erreurs")
+    if total_filtered > 0:
+        print(f"   Détail filtrage : {stats['no_email']} sans email, {stats['invalid_email']} email invalide, "
+              f"{stats['duplicate']} doublons, {stats['invalid_name']} nom suspect, {stats['invalid_comment']} commentaire suspect")
 
     # Écrire dans Google Sheets
     if rows_to_add:
@@ -631,7 +662,7 @@ def main():
     print("\n💾 État sauvegardé.")
 
     # Envoyer la notification
-    send_notification(gmail_service, len(rows_to_add), errors)
+    send_notification(gmail_service, len(rows_to_add), stats, errors)
 
     print("\n🎉 Terminé !")
 
@@ -639,8 +670,10 @@ def main():
 # ============================================================
 # NOTIFICATION PAR EMAIL
 # ============================================================
-def send_notification(gmail_service, count, errors=None):
+def send_notification(gmail_service, count, stats=None, errors=None):
     now = datetime.now().strftime("%d/%m/%Y à %H:%M")
+    stats = stats or {}
+    total_filtered = sum(stats.values())
 
     if count > 0:
         subject = f"Extraction avis : {count} nouveau(x) avis ajouté(s)"
@@ -650,6 +683,7 @@ Le script d'extraction s'est exécuté le {now}.
 
 Résumé :
 - {count} nouveau(x) avis ajouté(s) au Google Sheet
+- {total_filtered} entrée(s) filtrée(s)
 
 Lien vers le Google Sheet :
 https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit
@@ -661,6 +695,18 @@ https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit
 Le script d'extraction s'est exécuté le {now}.
 
 Aucun nouvel avis à traiter.
+- {total_filtered} entrée(s) filtrée(s)
+"""
+
+    # Détail des filtrages si applicable
+    if total_filtered > 0:
+        body_text += f"""
+Détail du filtrage :
+  - {stats.get('no_email', 0)} sans email (champ obligatoire)
+  - {stats.get('invalid_email', 0)} email invalide (blacklist/spam)
+  - {stats.get('duplicate', 0)} doublon(s)
+  - {stats.get('invalid_name', 0)} nom suspect
+  - {stats.get('invalid_comment', 0)} commentaire suspect
 """
 
     if errors:
