@@ -43,6 +43,9 @@ DEFAULT_CATEGORY = CONFIG.get("default_category", "Fast-food")
 API_MAX_RETRIES = CONFIG.get("api_retry", {}).get("max_retries", 3)
 API_INITIAL_DELAY = CONFIG.get("api_retry", {}).get("initial_delay_seconds", 1)
 
+# Mapping Nom commerce → Subdomain
+COMMERCE_TO_SUBDOMAIN = CONFIG.get("commerce_to_subdomain", {})
+
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/spreadsheets",
@@ -346,6 +349,22 @@ def get_sender_name(message):
     return ""
 
 
+def convert_commerce_to_subdomain(nom_commerce):
+    """Convertit le nom de commerce en subdomain selon le mapping."""
+    # Recherche exacte d'abord
+    if nom_commerce in COMMERCE_TO_SUBDOMAIN:
+        return COMMERCE_TO_SUBDOMAIN[nom_commerce]
+
+    # Recherche insensible à la casse
+    nom_lower = nom_commerce.lower().strip()
+    for commerce, subdomain in COMMERCE_TO_SUBDOMAIN.items():
+        if commerce.lower().strip() == nom_lower:
+            return subdomain
+
+    # Pas de correspondance trouvée, retourner le nom original
+    return nom_commerce
+
+
 def get_email_date(message):
     """Extrait la date de réception de l'email et la formate en DD/MM/YYYY."""
     headers = message.get("payload", {}).get("headers", [])
@@ -640,10 +659,11 @@ def main():
                 stats["invalid_comment"] += 1
                 continue
 
-            # Colonnes : ID | Nom commerce | Catégorie | Genre | Nom | Prénom | Nom complet | Email | Statut Email | Note | Date | Commentaire
+            # Colonnes : ID | Nom commerce (→ subdomain) | Catégorie | Genre | Nom | Prénom | Nom complet | Email | Statut Email | Note | Date | Commentaire
             # Note: ID (colonne A) est généré automatiquement par =ROW(), on écrit à partir de B
+            subdomain = convert_commerce_to_subdomain(nom_commerce)
             row = [
-                nom_commerce,           # B: Nom commerce
+                subdomain,              # B: Subdomain (converti depuis Nom commerce)
                 DEFAULT_CATEGORY,       # C: Catégorie
                 parsed["genre"],        # D: Genre
                 parsed["nom"],          # E: Nom
