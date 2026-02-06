@@ -1,0 +1,40 @@
+{
+  "spreadsheet_id": "13LdV9dEeT42u51OkY3TGiof-Htd3C8KjeqJKbI_PXNo",
+  "sheet_name": "Avis",
+  "notification_email": "kyrian.engel@gmail.com",
+  "default_category": "Fast-food",
+
+  "email_blacklist": [
+    "kyrian.engel@gmail.com",
+    "kyrianr.engelr@gmail.com",
+    "kyrian.kyrian.engel@gmail.com"
+  ],
+
+  "spam_keywords": [
+    "test", "fake", "spam", "caca", "popo", "pipi", "prout",
+    "asdf", "qwerty", "azerty", "aaa", "xxx", "zzz",
+    "noreply", "no-reply", "donotreply"
+  ],
+
+  "disposable_domains": [
+    "yopmail.com", "tempmail.com", "guerrillamail.com", "mailinator.com",
+    "10minutemail.com", "throwaway.email", "fakeinbox.com", "trashmail.com",
+    "temp-mail.org", "getnada.com", "maildrop.cc"
+  ],
+
+  "suspicious_names": [
+    "test", "blabla", "bla", "toto", "tata", "titi", "tutu",
+    "azerty", "qwerty", "asdf", "xxx", "zzz", "aaa", "bbb",
+    "fake", "spam", "null", "none", "na", "n/a", "inconnu",
+    "anonymous", "anonyme", "client", "user", "utilisateur"
+  ],
+
+  "comment_spam_exact": [
+    "test", "essai", "blabla", "asdf", "qwerty", "ok", "oui", "non"
+  ],
+
+  "api_retry": {
+    "max_retries": 3,
+    "initial_delay_seconds": 1
+  }
+}

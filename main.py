@@ -2,6 +2,7 @@ import os
 import re
 import json
 import base64
+import time
 from email.mime.text import MIMEText
 from datetime import datetime
 
@@ -9,16 +10,38 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # ============================================================
-# CONFIGURATION
+# CHARGEMENT DE LA CONFIGURATION
 # ============================================================
-SPREADSHEET_ID = "13LdV9dEeT42u51OkY3TGiof-Htd3C8KjeqJKbI_PXNo"
-SHEET_NAME = "Avis"
-NOTIFICATION_EMAIL = "kyrian.engel@gmail.com"
+CONFIG_FILE = "config.json"
 STATE_FILE = "last_processed.json"
 CREDENTIALS_FILE = "credentials.json"
 TOKEN_FILE = "token.json"
+
+
+def load_config():
+    """Charge la configuration depuis config.json."""
+    config_path = os.path.join(os.path.dirname(__file__), CONFIG_FILE)
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    # Fallback si pas de fichier config
+    return {}
+
+
+CONFIG = load_config()
+
+# Configuration principale
+SPREADSHEET_ID = CONFIG.get("spreadsheet_id", "")
+SHEET_NAME = CONFIG.get("sheet_name", "Avis")
+NOTIFICATION_EMAIL = CONFIG.get("notification_email", "")
+DEFAULT_CATEGORY = CONFIG.get("default_category", "Fast-food")
+
+# Configuration retry API
+API_MAX_RETRIES = CONFIG.get("api_retry", {}).get("max_retries", 3)
+API_INITIAL_DELAY = CONFIG.get("api_retry", {}).get("initial_delay_seconds", 1)
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
@@ -38,28 +61,46 @@ GENDER_MAP = {
 }
 
 # ============================================================
-# FILTRAGE DES EMAILS INVALIDES
+# FILTRAGE (chargé depuis config.json)
 # ============================================================
-# Emails à exclure (blacklist)
-EMAIL_BLACKLIST = {
-    "kyrian.engel@gmail.com",
-    "kyrianr.engelr@gmail.com",
-    "kyrian.kyrian.engel@gmail.com",
-}
+EMAIL_BLACKLIST = set(CONFIG.get("email_blacklist", []))
+SPAM_KEYWORDS = set(CONFIG.get("spam_keywords", []))
+DISPOSABLE_DOMAINS = set(CONFIG.get("disposable_domains", []))
 
-# Mots-clés suspects dans la partie locale de l'email
-SPAM_KEYWORDS = {
-    "test", "fake", "spam", "caca", "popo", "pipi", "prout",
-    "asdf", "qwerty", "azerty", "aaa", "xxx", "zzz",
-    "noreply", "no-reply", "donotreply",
-}
 
-# Domaines jetables connus
-DISPOSABLE_DOMAINS = {
-    "yopmail.com", "tempmail.com", "guerrillamail.com", "mailinator.com",
-    "10minutemail.com", "throwaway.email", "fakeinbox.com", "trashmail.com",
-    "temp-mail.org", "getnada.com", "maildrop.cc",
-}
+# ============================================================
+# RETRY AVEC BACKOFF EXPONENTIEL
+# ============================================================
+def api_call_with_retry(func, *args, **kwargs):
+    """
+    Exécute une fonction API avec retry et backoff exponentiel.
+    Utile pour gérer les erreurs temporaires (rate limit, timeout, etc.)
+    """
+    last_exception = None
+    delay = API_INITIAL_DELAY
+
+    for attempt in range(API_MAX_RETRIES):
+        try:
+            return func(*args, **kwargs)
+        except HttpError as e:
+            last_exception = e
+            # Erreurs 4xx (sauf 429) = pas de retry
+            if 400 <= e.resp.status < 500 and e.resp.status != 429:
+                raise
+            # 429 (rate limit) ou 5xx = retry
+            if attempt < API_MAX_RETRIES - 1:
+                print(f"   ⚠️ Erreur API ({e.resp.status}), nouvelle tentative dans {delay}s...")
+                time.sleep(delay)
+                delay *= 2  # Backoff exponentiel
+        except Exception as e:
+            last_exception = e
+            if attempt < API_MAX_RETRIES - 1:
+                print(f"   ⚠️ Erreur ({type(e).__name__}), nouvelle tentative dans {delay}s...")
+                time.sleep(delay)
+                delay *= 2
+
+    # Toutes les tentatives ont échoué
+    raise last_exception
 
 
 def is_valid_email(email):
@@ -102,13 +143,8 @@ def is_valid_email(email):
     return True
 
 
-# Noms suspects à filtrer
-SUSPICIOUS_NAMES = {
-    "test", "blabla", "bla", "toto", "tata", "titi", "tutu",
-    "azerty", "qwerty", "asdf", "xxx", "zzz", "aaa", "bbb",
-    "fake", "spam", "null", "none", "na", "n/a", "inconnu",
-    "anonymous", "anonyme", "client", "user", "utilisateur",
-}
+# Noms suspects à filtrer (chargé depuis config.json)
+SUSPICIOUS_NAMES = set(CONFIG.get("suspicious_names", []))
 
 
 def is_valid_name(nom, prenom):
@@ -137,8 +173,8 @@ def is_valid_name(nom, prenom):
     return True
 
 
-# Commentaires exactement égaux à ces valeurs = invalides
-COMMENT_SPAM_EXACT = {"test", "essai", "blabla", "asdf", "qwerty", "ok", "oui", "non"}
+# Commentaires exactement égaux à ces valeurs = invalides (chargé depuis config.json)
+COMMENT_SPAM_EXACT = set(CONFIG.get("comment_spam_exact", []))
 
 
 def is_valid_comment(commentaire):
@@ -279,10 +315,12 @@ def save_state(state, sheets_service=None):
 def load_existing_emails(sheets_service):
     """Charge les emails déjà présents dans le Sheet pour éviter les doublons."""
     try:
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{SHEET_NAME}!G:G",  # Colonne G = Email
-        ).execute()
+        result = api_call_with_retry(
+            sheets_service.spreadsheets().values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{SHEET_NAME}!G:G",  # Colonne G = Email
+            ).execute
+        )
         values = result.get("values", [])
         # Ignorer l'en-tête (première ligne) et normaliser
         emails = {row[0].lower().strip() for row in values[1:] if row and row[0]}
@@ -440,9 +478,11 @@ def get_email_body(message):
 def ensure_sheet_has_enough_rows(sheets_service, spreadsheet_id, sheet_name, required_rows):
     """Agrandit la feuille si elle n'a pas assez de lignes."""
     # Récupérer les métadonnées de la feuille
-    spreadsheet = sheets_service.spreadsheets().get(
-        spreadsheetId=spreadsheet_id
-    ).execute()
+    spreadsheet = api_call_with_retry(
+        sheets_service.spreadsheets().get(
+            spreadsheetId=spreadsheet_id
+        ).execute
+    )
 
     # Trouver la feuille par son nom
     sheet_id = None
@@ -470,10 +510,12 @@ def ensure_sheet_has_enough_rows(sheets_service, spreadsheet_id, sheet_name, req
                 }
             }]
         }
-        sheets_service.spreadsheets().batchUpdate(
-            spreadsheetId=spreadsheet_id,
-            body=request
-        ).execute()
+        api_call_with_retry(
+            sheets_service.spreadsheets().batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body=request
+            ).execute
+        )
         print(f"   ✅ Feuille agrandie")
 
     return current_rows
@@ -505,12 +547,14 @@ def main():
 
     print("📥 Récupération de la liste des mails...")
     while True:
-        results = gmail_service.users().messages().list(
-            userId="me",
-            labelIds=["INBOX"],
-            maxResults=500,
-            pageToken=next_page_token,
-        ).execute()
+        results = api_call_with_retry(
+            gmail_service.users().messages().list(
+                userId="me",
+                labelIds=["INBOX"],
+                maxResults=500,
+                pageToken=next_page_token,
+            ).execute
+        )
 
         messages = results.get("messages", [])
         all_messages.extend(messages)
@@ -552,11 +596,13 @@ def main():
 
     for i, msg_info in enumerate(new_messages):
         try:
-            msg = gmail_service.users().messages().get(
-                userId="me",
-                id=msg_info["id"],
-                format="full",
-            ).execute()
+            msg = api_call_with_retry(
+                gmail_service.users().messages().get(
+                    userId="me",
+                    id=msg_info["id"],
+                    format="full",
+                ).execute
+            )
 
             # Extraire les données
             nom_commerce = get_sender_name(msg)
@@ -594,19 +640,19 @@ def main():
                 stats["invalid_comment"] += 1
                 continue
 
-            # Colonnes : Nom commerce | Catégorie | Genre | Nom | Prénom | Nom complet | Email | Statut Email | Note | Commentaire | Date
+            # Colonnes : Nom commerce | Catégorie | Genre | Nom | Prénom | Nom complet | Email | Statut Email | Note | Date | Commentaire
             row = [
-                nom_commerce,           # Nom commerce
-                "Fast-food",            # Catégorie
-                parsed["genre"],        # Genre
-                parsed["nom"],          # Nom
-                parsed["prenom"],       # Prénom
-                "",                     # Nom complet (vide)
-                parsed["email"],        # Email
-                "Pending",              # Statut Email
-                1,                      # Note
-                parsed["commentaire"],  # Commentaire
-                date_reception,         # Date de réception
+                nom_commerce,           # A: Nom commerce
+                DEFAULT_CATEGORY,       # B: Catégorie
+                parsed["genre"],        # C: Genre
+                parsed["nom"],          # D: Nom
+                parsed["prenom"],       # E: Prénom
+                "",                     # F: Nom complet (vide)
+                parsed["email"],        # G: Email
+                "Pending",              # H: Statut Email
+                1,                      # I: Note
+                date_reception,         # J: Date de réception
+                parsed["commentaire"],  # K: Commentaire
             ]
             rows_to_add.append(row)
 
@@ -629,10 +675,12 @@ def main():
         print("\n📤 Écriture dans Google Sheets...")
 
         # Trouver la prochaine ligne vide
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{SHEET_NAME}!A:A",
-        ).execute()
+        result = api_call_with_retry(
+            sheets_service.spreadsheets().values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"{SHEET_NAME}!A:A",
+            ).execute
+        )
         existing_rows = len(result.get("values", []))
         next_row = existing_rows + 1
 
@@ -645,12 +693,14 @@ def main():
         for start in range(0, len(rows_to_add), batch_size):
             batch = rows_to_add[start:start + batch_size]
             body = {"values": batch}
-            sheets_service.spreadsheets().values().update(
-                spreadsheetId=SPREADSHEET_ID,
-                range=f"{SHEET_NAME}!A{next_row + start}",
-                valueInputOption="RAW",
-                body=body,
-            ).execute()
+            api_call_with_retry(
+                sheets_service.spreadsheets().values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range=f"{SHEET_NAME}!A{next_row + start}",
+                    valueInputOption="RAW",
+                    body=body,
+                ).execute
+            )
             print(f"   → Lot {start + 1} à {start + len(batch)} écrit")
 
         print(f"   ✅ {len(rows_to_add)} lignes ajoutées")
